@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.audio.pandora"
+       name="Pandora Radio"
+       version="2.1.3"
+       provider-name="srhamil">
+  <requires>
+    <import addon="xbmc.python" version="3.0.0"/>
+  </requires>
+  <extension point="xbmc.python.pluginsource" library="default.py">
+    <provides>audio</provides>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en_GB">Listen to your Pandora stations</summary>
+    <description lang="en_GB">Unofficial client for the Pandora music service. Requires a Pandora account (US only). Sign in via the add-on settings.</description>
+    <license>MIT</license>
+    <platform>all</platform>
+    <assets>
+        <icon>resources/icon.png</icon>
+    </assets>
+  </extension>
+</addon>
