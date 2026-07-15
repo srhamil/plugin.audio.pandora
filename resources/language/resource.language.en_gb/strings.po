@@ -32,3 +32,59 @@ msgstr ""
 msgctxt "#32005"
 msgid "Test login"
 msgstr ""
+
+msgctxt "#30150"
+msgid "Hint overlay"
+msgstr ""
+
+msgctxt "#30151"
+msgid "Position"
+msgstr ""
+
+msgctxt "#30153"
+msgid "Display duration"
+msgstr ""
+
+msgctxt "#30154"
+msgid "Horizontal adjustment"
+msgstr ""
+
+msgctxt "#30155"
+msgid "Vertical adjustment"
+msgstr ""
+
+msgctxt "#30160"
+msgid "Top left"
+msgstr ""
+
+msgctxt "#30161"
+msgid "Top center"
+msgstr ""
+
+msgctxt "#30162"
+msgid "Top right"
+msgstr ""
+
+msgctxt "#30163"
+msgid "Center left"
+msgstr ""
+
+msgctxt "#30164"
+msgid "Center"
+msgstr ""
+
+msgctxt "#30165"
+msgid "Center right"
+msgstr ""
+
+msgctxt "#30166"
+msgid "Bottom left"
+msgstr ""
+
+msgctxt "#30167"
+msgid "Bottom center"
+msgstr ""
+
+msgctxt "#30168"
+msgid "Bottom right"
+msgstr ""
