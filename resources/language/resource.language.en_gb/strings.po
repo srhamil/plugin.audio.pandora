@@ -88,3 +88,35 @@ msgstr ""
 msgctxt "#30168"
 msgid "Bottom right"
 msgstr ""
+
+msgctxt "#30170"
+msgid "On playback start"
+msgstr ""
+
+msgctxt "#30171"
+msgid "Stay on current screen"
+msgstr ""
+
+msgctxt "#30172"
+msgid "Go to playlist"
+msgstr ""
+
+msgctxt "#30173"
+msgid "Go to fullscreen"
+msgstr ""
+
+msgctxt "#30170"
+msgid "On playback start"
+msgstr ""
+
+msgctxt "#30171"
+msgid "Stay on current screen"
+msgstr ""
+
+msgctxt "#30172"
+msgid "Go to playlist"
+msgstr ""
+
+msgctxt "#30173"
+msgid "Go to fullscreen"
+msgstr ""

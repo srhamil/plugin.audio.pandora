@@ -93,6 +93,30 @@
                 <formatlabel>14045</formatlabel>
             </control>
         </setting>
+        <setting id="start_view" type="string" label="30170" help="">
+          <level>0</level>
+          <default>1</default>
+          <constraints>
+              <options>
+                  <option label="30171">0</option>
+                  <option label="30172">1</option>
+                  <option label="30173">2</option>
+              </options>
+          </constraints>
+          <control type="spinner" format="string" />
+        </setting>
+        <setting id="start_view" type="string" label="30170" help="">
+          <level>0</level>
+          <default>1</default>
+          <constraints>
+              <options>
+                  <option label="30171">0</option>
+                  <option label="30172">1</option>
+                  <option label="30173">2</option>
+              </options>
+          </constraints>
+          <control type="spinner" format="string" />
+      </setting>
       </group>    
     </category>
   </section>

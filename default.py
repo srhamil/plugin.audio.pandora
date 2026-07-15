@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import sys
+import time
 import urllib.parse
 from typing import Any, Callable, TypeVar
 
@@ -9,7 +10,6 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 import xbmcplugin
-import time
 
 sys.path.insert(0, xbmcaddon.Addon().getAddonInfo("path") + "/resources/lib")
 from pandora import PandoraClient, PandoraError  # noqa: E402
@@ -23,15 +23,28 @@ BASE_URL: str = sys.argv[0]
 _PROP_TOKEN = "plugin.audio.pandora.authtoken"
 _PROP_CSRF = "plugin.audio.pandora.csrf"
 
+# Continuation plumbing (shared with service.py):
+#   pandora.station_id  - station whose tracks are queued; service passes it
+#                         back to action=append when the queue runs low.
+#   pandora.appending   - re-entrancy guard so overlapping RunPlugin(append)
+#                         invocations are silent no-ops.
+_PROP_STATION = "pandora.station_id"
+_PROP_APPENDING = "pandora.appending"
+
+# Backoff schedule for transient fragment-fetch failures (seconds).
+# Worst case adds ~1.75s before giving up -- within the agreed budget.
+_RETRY_DELAYS: tuple[float, ...] = (0.25, 0.5, 1.0)
+
 T = TypeVar("T")
 
 
-
 _T0 = time.time()
- 
+
+
 def trace(msg: str) -> None:
     xbmc.log("[plugin.audio.pandora/plugin] (+%6.2fs h=%s) %s"
              % (time.time() - _T0, HANDLE, msg), xbmc.LOGINFO)
+
 
 def build_url(**kwargs: str) -> str:
     return BASE_URL + "?" + urllib.parse.urlencode(kwargs)
@@ -40,9 +53,6 @@ def build_url(**kwargs: str) -> str:
 def notify(message: str, error: bool = False) -> None:
     icon = xbmcgui.NOTIFICATION_ERROR if error else xbmcgui.NOTIFICATION_INFO
     xbmcgui.Dialog().notification("Pandora", message, icon, 4000)
-
-
-
 
 
 def _tok(value: str | None) -> str:
@@ -133,6 +143,29 @@ def with_client(fn: Callable[[PandoraClient], T]) -> tuple[PandoraClient, T]:
         return result
 
 
+def with_retry(fn: Callable[[PandoraClient], T]) -> tuple[PandoraClient, T]:
+    """with_client plus short exponential backoff for transient failures.
+
+    with_client already handles the auth-expiry case (clear + relogin, once).
+    This layer covers everything else transient -- DNS hiccups, CDN/API
+    timeouts -- with delays of 0.25s / 0.5s / 1s before the error propagates.
+    """
+    delays = list(_RETRY_DELAYS)
+    attempt = 1
+    while True:
+        try:
+            return with_client(fn)
+        except PandoraError as e:
+            if not delays:
+                trace("with_retry: attempt %d failed (%s) -> giving up" % (attempt, e))
+                raise
+            delay = delays.pop(0)
+            trace("with_retry: attempt %d failed (%s) -> retrying in %.2fs"
+                  % (attempt, e, delay))
+            xbmc.sleep(int(delay * 1000))
+            attempt += 1
+
+
 def list_stations() -> None:
     xbmcplugin.setPluginCategory(HANDLE, "Stations")
     xbmcplugin.setContent(HANDLE, "songs")
@@ -154,7 +187,7 @@ def list_stations() -> None:
             url = art[-1].get("url")
             if url:
                 li.setArt({"thumb": url, "icon": url})
-        li.setInfo("music", {"title": name})
+        li.getMusicInfoTag().setTitle(name)
         li.addContextMenuItems([(
             "Delete station",
             "RunPlugin(%s)" % build_url(action="delete_station",
@@ -187,8 +220,6 @@ def track_listitem(track: dict[str, Any]) -> xbmcgui.ListItem:
         tag.setUserRating(10)          # Pandora thumbs-up -> max user rating
 
     art_url = track.get("albumArt", [])
-    ...  # rest unchanged
-    art_url = track.get("albumArt", [])
     if art_url:
         url = art_url[-1].get("url")
         if url:
@@ -196,7 +227,7 @@ def track_listitem(track: dict[str, Any]) -> xbmcgui.ListItem:
     li.setProperty("IsPlayable", "true")
     token = track.get("trackToken")
     if token:
-        li.setProperty("pandora_token",token)
+        li.setProperty("pandora_token", token)
         li.addContextMenuItems([
             ("Thumbs up",
              "RunPlugin(%s)" % build_url(action="feedback", token=token, positive="1")),
@@ -215,7 +246,7 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
 
     xbmcplugin.setContent(HANDLE, "songs")
     try:
-        _, tracks = with_client(lambda c: c.get_fragment(station_id, is_start))
+        _, tracks = with_retry(lambda c: c.get_fragment(station_id, is_start))
     except PandoraError as e:
         notify(str(e), error=True)
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
@@ -224,9 +255,13 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
     if not tracks:
         notify("Pandora returned no tracks for this station", error=True)
 
+    # Remember which station is on deck so the service can pass it back to
+    # action=append when the player playlist is about to run dry.
+    xbmcgui.Window(10000).setProperty(_PROP_STATION, station_id)
+
     added = 0
     skipped = 0
-    for idx,track in enumerate(tracks[:limit]):
+    for idx, track in enumerate(tracks[:limit]):
         audio_url = track.get("audioURL")
         title = track.get("songTitle", "?")
         token = track.get("trackToken", "")
@@ -234,7 +269,6 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
         if not audio_url:
             skipped += 1
             trace("  [%02d] SKIP (no audioURL): %s" % (idx, title))
-
             continue
         trace("  [%02d] add: %s | token=%s | url=...%s"
               % (idx, title, (token[:10] + "...") if token else "MISSING",
@@ -258,17 +292,66 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
     xbmcplugin.endOfDirectory(HANDLE, cacheToDisc=False)
 
 
+def do_append(station_id: str) -> None:
+    """Fetch the next playlist fragment and append its tracks to the music
+    player playlist. Invoked by the service via RunPlugin when the queue is
+    about to run dry -- this is what keeps a station playing hands-off.
+
+    RunPlugin invocations don't render a directory, so no endOfDirectory.
+    Guarded against re-entry: overlapping invocations are silent no-ops.
+    """
+    win = xbmcgui.Window(10000)
+    if win.getProperty(_PROP_APPENDING) == "1":
+        trace("append: already in progress, skipping")
+        return
+    win.setProperty(_PROP_APPENDING, "1")
+    try:
+        limit = ADDON.getSettingInt("tracks_per_page") or 4
+        trace("append: station=%s limit=%s" % (station_id, limit))
+        try:
+            _, tracks = with_retry(lambda c: c.get_fragment(station_id, False))
+        except PandoraError as e:
+            trace("append: fragment fetch failed after retries: %s" % e)
+            notify(str(e), error=True)
+            return
+
+        playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
+        added = 0
+        skipped = 0
+        for idx, track in enumerate(tracks[:limit]):
+            audio_url = track.get("audioURL")
+            title = track.get("songTitle", "?")
+            token = track.get("trackToken", "")
+
+            if not audio_url:
+                skipped += 1
+                trace("  [%02d] SKIP (no audioURL): %s" % (idx, title))
+                continue
+            trace("  [%02d] append: %s | token=%s | url=...%s"
+                  % (idx, title, (token[:10] + "...") if token else "MISSING",
+                     audio_url[-40:]))
+            playlist.add(audio_url, track_listitem(track))
+            added += 1
+
+        trace("append done: added=%d skipped=%d playlist size=%d"
+              % (added, skipped, playlist.size()))
+        if not added:
+            notify("Pandora returned no playable tracks", error=True)
+    finally:
+        win.clearProperty(_PROP_APPENDING)
+
+
 def do_search() -> None:
     query = xbmcgui.Dialog().input("Search Pandora (artist or song)")
     if not query:
-        trace("endOfDirectory(succeeded=True)") 
+        trace("endOfDirectory(succeeded=False)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
     try:
         _, results = with_client(lambda c: c.search(query))
     except PandoraError as e:
         notify(str(e), error=True)
-        trace("endOfDirectory(succeeded=True)")
+        trace("endOfDirectory(succeeded=False)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
@@ -306,8 +389,7 @@ def do_create_station(pandora_id: str, query: str) -> None:
         _, station = with_client(lambda c: c.create_station(pandora_id, query))
     except PandoraError as e:
         notify(str(e), error=True)
-        trace("endOfDirectory(succeeded=True)")
-
+        trace("endOfDirectory(succeeded=False)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
     name = station.get("name", "station")
@@ -376,6 +458,8 @@ def router(paramstring: str) -> None:
         list_stations()
     elif action == "station":
         list_station_tracks(params["station_id"], params.get("start") == "1")
+    elif action == "append":
+        do_append(params["station_id"])
     elif action == "search":
         do_search()
     elif action == "create_station":
@@ -391,7 +475,7 @@ def router(paramstring: str) -> None:
         notify("Session cleared")
     else:
         xbmc.log("plugin.audio.pandora: unknown action %s" % action, xbmc.LOGWARNING)
-        trace("endOfDirectory(succeeded=True)")
+        trace("endOfDirectory(succeeded=False)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
 
 
