@@ -9,6 +9,7 @@ import xbmc
 import xbmcaddon
 import xbmcgui
 import xbmcplugin
+import time
 
 sys.path.insert(0, xbmcaddon.Addon().getAddonInfo("path") + "/resources/lib")
 from pandora import PandoraClient, PandoraError  # noqa: E402
@@ -25,6 +26,13 @@ _PROP_CSRF = "plugin.audio.pandora.csrf"
 T = TypeVar("T")
 
 
+
+_T0 = time.time()
+ 
+def trace(msg: str) -> None:
+    xbmc.log("[plugin.audio.pandora/plugin] (+%6.2fs h=%s) %s"
+             % (time.time() - _T0, HANDLE, msg), xbmc.LOGINFO)
+
 def build_url(**kwargs: str) -> str:
     return BASE_URL + "?" + urllib.parse.urlencode(kwargs)
 
@@ -34,9 +42,7 @@ def notify(message: str, error: bool = False) -> None:
     xbmcgui.Dialog().notification("Pandora", message, icon, 4000)
 
 
-def trace(msg: str) -> None:
-    """Session-lifecycle tracing. Visible only with Kodi debug logging on."""
-    xbmc.log("plugin.audio.pandora [trace] %s" % msg, xbmc.LOGDEBUG)
+
 
 
 def _tok(value: str | None) -> str:
@@ -173,7 +179,7 @@ def track_listitem(track: dict[str, Any]) -> xbmcgui.ListItem:
     tag = li.getMusicInfoTag()
     tag.setTitle(title)
     if artist:
-        tag.setArtists([artist])
+        tag.setArtist(artist)
     if album:
         tag.setAlbum(album)
     tag.setDuration(int(track.get("trackLength", 0)))
@@ -190,6 +196,7 @@ def track_listitem(track: dict[str, Any]) -> xbmcgui.ListItem:
     li.setProperty("IsPlayable", "true")
     token = track.get("trackToken")
     if token:
+        li.setProperty("pandora_token",token)
         li.addContextMenuItems([
             ("Thumbs up",
              "RunPlugin(%s)" % build_url(action="feedback", token=token, positive="1")),
@@ -202,6 +209,10 @@ def track_listitem(track: dict[str, Any]) -> xbmcgui.ListItem:
 def list_station_tracks(station_id: str, is_start: bool) -> None:
     """Fetch a playlist fragment and list its tracks as playable items,
     with a 'More…' folder at the end that pulls the next fragment."""
+    limit = ADDON.getSettingInt("tracks_per_page") or 4
+    trace("list_station_tracks: station=%s start=%r limit=%s"
+          % (station_id, is_start, limit))
+
     xbmcplugin.setContent(HANDLE, "songs")
     try:
         _, tracks = with_client(lambda c: c.get_fragment(station_id, is_start))
@@ -213,15 +224,28 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
     if not tracks:
         notify("Pandora returned no tracks for this station", error=True)
 
-    limit = ADDON.getSettingInt("tracks_per_page") or 4
-    for track in tracks[:limit]:
+    added = 0
+    skipped = 0
+    for idx,track in enumerate(tracks[:limit]):
         audio_url = track.get("audioURL")
+        title = track.get("songTitle", "?")
+        token = track.get("trackToken", "")
+
         if not audio_url:
+            skipped += 1
+            trace("  [%02d] SKIP (no audioURL): %s" % (idx, title))
+
             continue
+        trace("  [%02d] add: %s | token=%s | url=...%s"
+              % (idx, title, (token[:10] + "...") if token else "MISSING",
+                 audio_url[-40:]))
+
         li = track_listitem(track)
         # Pass the resolved stream directly; Pandora URLs expire, so these
         # items are meant to be played from this listing, not bookmarked.
         xbmcplugin.addDirectoryItem(HANDLE, audio_url, li, isFolder=False)
+        added += 1
+    trace("directory built: added=%d skipped=%d" % (added, skipped))
 
     more = xbmcgui.ListItem(label="[B]More…[/B]")
     xbmcplugin.addDirectoryItem(
@@ -230,18 +254,21 @@ def list_station_tracks(station_id: str, is_start: bool) -> None:
         more,
         isFolder=True,
     )
+    trace("endOfDirectory(succeeded=True)")
     xbmcplugin.endOfDirectory(HANDLE, cacheToDisc=False)
 
 
 def do_search() -> None:
     query = xbmcgui.Dialog().input("Search Pandora (artist or song)")
     if not query:
+        trace("endOfDirectory(succeeded=True)") 
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
     try:
         _, results = with_client(lambda c: c.search(query))
     except PandoraError as e:
         notify(str(e), error=True)
+        trace("endOfDirectory(succeeded=True)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
 
@@ -270,6 +297,7 @@ def do_search() -> None:
             li,
             isFolder=True,
         )
+    trace("endOfDirectory(succeeded=True)")
     xbmcplugin.endOfDirectory(HANDLE, cacheToDisc=False)
 
 
@@ -278,6 +306,8 @@ def do_create_station(pandora_id: str, query: str) -> None:
         _, station = with_client(lambda c: c.create_station(pandora_id, query))
     except PandoraError as e:
         notify(str(e), error=True)
+        trace("endOfDirectory(succeeded=True)")
+
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
         return
     name = station.get("name", "station")
@@ -287,6 +317,7 @@ def do_create_station(pandora_id: str, query: str) -> None:
         # Jump straight into the new station.
         list_station_tracks(station_id, True)
     else:
+        trace("endOfDirectory(succeeded=True)")
         xbmcplugin.endOfDirectory(HANDLE)
 
 
@@ -302,10 +333,13 @@ def do_delete_station(station_id: str, name: str) -> None:
 
 
 def do_feedback(token: str, positive: bool) -> None:
+    trace("feedback: token=%s positive=%s" % (token[:10], positive))
     try:
         with_client(lambda c: c.feedback(token, positive))
         notify("Thumbs up saved" if positive else "Thumbs down saved")
+        trace("feedback: API ok")
     except PandoraError as e:
+        trace(f"feedback: API error{e}")
         notify(str(e), error=True)
 
 
@@ -334,6 +368,7 @@ def do_test_login() -> None:
 
 
 def router(paramstring: str) -> None:
+    trace("router: argv=%r params=%r" % (sys.argv, paramstring))
     params = dict(urllib.parse.parse_qsl(paramstring))
     action = params.get("action")
 
@@ -356,6 +391,7 @@ def router(paramstring: str) -> None:
         notify("Session cleared")
     else:
         xbmc.log("plugin.audio.pandora: unknown action %s" % action, xbmc.LOGWARNING)
+        trace("endOfDirectory(succeeded=True)")
         xbmcplugin.endOfDirectory(HANDLE, succeeded=False)
 
 
