@@ -11,6 +11,8 @@ import xbmcaddon
 import xbmcgui
 import xbmcplugin
 
+_WINDOW_MUSIC_PLAYLIST = 10500
+
 sys.path.insert(0, xbmcaddon.Addon().getAddonInfo("path") + "/resources/lib")
 from pandora import PandoraClient, PandoraError  # noqa: E402
 
@@ -335,6 +337,17 @@ def do_append(station_id: str) -> None:
 
         trace("append done: added=%d skipped=%d playlist size=%d"
               % (added, skipped, playlist.size()))
+        if added and xbmcgui.getCurrentWindowId() == _WINDOW_MUSIC_PLAYLIST:
+            win = xbmcgui.Window(_WINDOW_MUSIC_PLAYLIST)
+            list_id = win.getFocusId()
+            pos = playlist.getposition()
+            trace("append: playlist window active -> Container.Refresh "
+                "(focused control=%d, playing pos=%d)" % (list_id, pos))
+            xbmc.executebuiltin("Container.Refresh")
+            if list_id > 0 and pos >= 0:
+                xbmc.sleep(300)  # let the container reload before refocusing
+                xbmc.executebuiltin(
+                    "SetFocus(%d, %d, absolute)" % (list_id, pos))
         if not added:
             notify("Pandora returned no playable tracks", error=True)
     finally:

@@ -1,5 +1,5 @@
 set PLUGIN=plugin.audio.pandora
-set VERSION=2.1.14
+set VERSION=2.1.16
 
 set DIR=C:\dev\Kodi\%PLUGIN%
 set ZIPPER="C:\Program Files\7-Zip\7z.exe"
